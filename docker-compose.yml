@@ -1,0 +1,16 @@
+services:
+  minibridge:
+    build: .
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./configs:/config:ro
+      - ./data:/data
+
+  minibridge-web:
+    build:
+      context: ./web
+    depends_on:
+      - minibridge
+    ports:
+      - "5173:80"

@@ -1,0 +1,12 @@
+.minibridge-signing.key
+.minibridge-signing.key.pub
+.minibridge-state.json
+data/
+__pycache__/
+*.pyc
+web/node_modules/
+web/dist/
+web/.vite/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts

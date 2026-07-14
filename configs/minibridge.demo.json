@@ -1,0 +1,38 @@
+{
+  "service_id": "minibridge-demo",
+  "tee_mode": "container-mock",
+  "attestation_provider": {
+    "kind": "mock",
+    "mode": "container-mock",
+    "service_instance_id": "minibridge-demo"
+  },
+  "pricing_table": {
+    "pricing_table_id": "minibridge-demo-pricing",
+    "models": {
+      "gpt-demo": {
+        "input_per_1k": "0.0100",
+        "output_per_1k": "0.0300"
+      }
+    }
+  },
+  "providers": [
+    {
+      "provider_id": "mock",
+      "provider_kind": "mock"
+    }
+  ],
+  "keys": [
+    {
+      "owner_id": "alice",
+      "key_id": "alice-key",
+      "api_key": "sk-demo-secret",
+      "policy": {
+        "allowed_callers": ["bob-agent"],
+        "allowed_models": ["gpt-demo"],
+        "spend_limit_usd": "1.00",
+        "require_nonce": true,
+        "require_expiry": true
+      }
+    }
+  ]
+}
