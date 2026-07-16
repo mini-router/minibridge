@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from argparse import ArgumentParser, Namespace
-from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -23,10 +22,13 @@ from . import (
     StaticAttestationProvider,
     verify_receipt,
 )
+from .bundle import ProofBundle, verify_bundle, write_bundle
+from .attestation import AttestationPolicy, FileAttestationProvider
 from .http_server import run_server
-from .models import LLMRequest, LLMResponse, Receipt
+from .models import LLMRequest, LLMResponse, Proof, Receipt
 from .provider import build_provider_from_payload
-from .state import load_state, restore_keys, restore_receipts, save_state
+from .state import load_state, restore_keys, restore_proofs, restore_receipts, save_state
+from .reporting import render_json, write_json_report
 
 
 def _load_json_source(path: str | Path) -> Any:
@@ -38,7 +40,7 @@ def _load_json_source(path: str | Path) -> Any:
 
 
 def _dump_json(payload: Any, path: str | Path | None = None) -> None:
-    raw = json.dumps(payload, indent=2, sort_keys=True, default=asdict)
+    raw = render_json(payload, pretty=True)
     if path is None:
         sys.stdout.write(raw)
         sys.stdout.write("\n")
@@ -47,7 +49,7 @@ def _dump_json(payload: Any, path: str | Path | None = None) -> None:
         sys.stdout.write(raw)
         sys.stdout.write("\n")
         return
-    Path(path).write_text(raw + "\n", encoding="utf-8")
+    write_json_report(path, payload, pretty=True)
 
 
 def _http_json(method: str, url: str, payload: Any | None = None) -> Any:
@@ -116,7 +118,18 @@ def _build_attestation_provider(payload: dict[str, Any] | None) -> Any:
                 if key not in {"kind", "type", "mode"}
             }
         return StaticAttestationProvider(mode=str(payload.get("mode") or "static-tee"), evidence=evidence)
+    if kind in {"file", "cpu-file", "tee-file"}:
+        path = payload.get("path")
+        if path is None:
+            raise ValueError("file attestation provider requires a path")
+        return FileAttestationProvider(path=str(path), mode=str(payload.get("mode") or "cpu-tee"))
     raise ValueError(f"unknown attestation provider kind {kind!r}")
+
+
+def _build_attestation_policy(payload: dict[str, Any] | None) -> AttestationPolicy | None:
+    if payload is None:
+        return None
+    return AttestationPolicy.from_dict(payload)
 
 
 def _load_or_create_signer(private_key_file: Path) -> ReceiptSigner:
@@ -151,6 +164,7 @@ def _bootstrap_from_payload(payload: dict[str, Any], signer: ReceiptSigner) -> t
         raise ValueError("state/config payload must include pricing_table")
     pricing_table = _build_pricing_table(payload["pricing_table"], default_table_id="minibridge")
     attestation_provider = _build_attestation_provider(payload.get("attestation_provider"))
+    attestation_policy = _build_attestation_policy(payload.get("attestation_policy"))
     service = LLMProofService(
         service_id=str(payload.get("service_id") or "minibridge"),
         signer=signer,
@@ -158,12 +172,25 @@ def _bootstrap_from_payload(payload: dict[str, Any], signer: ReceiptSigner) -> t
         tee_mode=str(payload.get("tee_mode") or "tee-ready-mock"),
         attestation=dict(payload.get("attestation") or {}),
         attestation_provider=attestation_provider,
+        attestation_policy=attestation_policy,
     )
     registry = ProviderRegistry()
     for provider_payload in payload.get("providers") or []:
         registry.register(build_provider_from_payload(provider_payload))
     restore_keys(service, list(payload.get("keys") or []))
     restore_receipts(service, list(payload.get("receipts") or []))
+    restore_proofs(service, list(payload.get("proofs") or []))
+    try:
+        service.seal_attestation(
+            context=service.build_attestation_context(
+                provider_registry=registry.providers,
+                extra=dict(payload.get("attestation_context") or {}),
+            ),
+            policy=attestation_policy,
+        )
+    except Exception:
+        if attestation_provider is not None:
+            raise
     return service, registry
 
 
@@ -199,6 +226,9 @@ def _bootstrap_runtime(args: Namespace) -> tuple[LLMProofService, ProviderRegist
         )
         registry = ProviderRegistry()
         registry.register(MockProvider())
+        service.seal_attestation(
+            context=service.build_attestation_context(provider_registry=registry.providers),
+        )
         if state_file is not None:
             save_state(state_file, service, registry)
         return service, registry, signer, public_key_file, state_file
@@ -223,6 +253,23 @@ def _build_pricing_table_from_receipt(receipt: Receipt) -> PricingTable:
                 output_per_1k=Decimal(receipt.output_token_price_per_1k),
             )
         },
+    )
+
+
+def _build_request_from_payload(payload: dict[str, Any], provider_id: str | None = None) -> LLMRequest:
+    request_provider_id = str(provider_id or payload.get("provider_id") or "mock")
+    return LLMRequest(
+        request_id=str(payload["request_id"]),
+        provider_id=request_provider_id,
+        caller_id=str(payload["caller_id"]),
+        owner_id=str(payload["owner_id"]),
+        key_id=str(payload["key_id"]),
+        model=str(payload["model"]),
+        messages=list(payload.get("messages") or []),
+        parameters=dict(payload.get("parameters") or {}),
+        metadata=dict(payload.get("metadata") or {}),
+        nonce=payload.get("nonce"),
+        expires_at=payload.get("expires_at"),
     )
 
 
@@ -286,11 +333,69 @@ def cmd_call(args: Namespace) -> int:
     return 0
 
 
+def cmd_prove(args: Namespace) -> int:
+    payload = _load_json_source(args.payload)
+    provider_id = args.provider_id or payload.get("provider_id")
+    if provider_id is not None:
+        payload["provider_id"] = provider_id
+        url = f"{args.server}/providers/{provider_id}/prove"
+    else:
+        url = f"{args.server}/prove"
+    _dump_json(_http_json("POST", url, payload), args.output)
+    return 0
+
+
+def cmd_proofs_list(args: Namespace) -> int:
+    _dump_json(_http_json("GET", f"{args.server}/proofs"), args.output)
+    return 0
+
+
+def cmd_proofs_show(args: Namespace) -> int:
+    _dump_json(_http_json("GET", f"{args.server}/proofs/{args.proof_id}"), args.output)
+    return 0
+
+
+def cmd_bundle_create(args: Namespace) -> int:
+    payload = _http_json("GET", f"{args.server}/bundle/export")
+    if not payload.get("ok"):
+        raise RuntimeError("failed to fetch bundle export")
+    bundle = ProofBundle.from_dict(dict(payload["bundle"]))
+    bundle_dir = write_bundle(args.bundle, bundle)
+    payload = {
+        "ok": True,
+        "bundle_dir": str(bundle_dir),
+        "manifest": bundle.manifest.to_dict(),
+        "raw_proof_count": len(bundle.raw_proofs),
+        "proof_count": len(bundle.verified_proofs),
+    }
+    _dump_json(payload, args.output)
+    return 0
+
+
+def cmd_bundle_verify(args: Namespace) -> int:
+    public_key = None
+    if args.public_key_file is not None:
+        public_key = _load_public_key(Path(args.public_key_file))
+    result = verify_bundle(args.bundle, public_key=public_key)
+    _dump_json({"ok": result["verified"], "result": result}, args.output)
+    return 0 if result["verified"] else 1
+
+
 def cmd_verify(args: Namespace) -> int:
-    receipt_payload = _load_json_source(args.receipt)
-    receipt = Receipt.from_dict(receipt_payload)
-    request_obj = None
-    response_obj = None
+    proof_obj = None
+    if args.proof is not None:
+        proof_obj = Proof.from_dict(_load_json_source(args.proof))
+
+    if args.receipt is not None:
+        receipt_payload = _load_json_source(args.receipt)
+        receipt = Receipt.from_dict(receipt_payload)
+    elif proof_obj is not None:
+        receipt = proof_obj.receipt
+    else:
+        raise ValueError("verify requires --receipt or --proof")
+
+    request_obj = proof_obj.request if proof_obj is not None else None
+    response_obj = proof_obj.response if proof_obj is not None else None
     if args.request is not None:
         request_obj = LLMRequest.from_dict(_load_json_source(args.request))
     if args.response is not None:
@@ -391,8 +496,45 @@ def build_parser() -> ArgumentParser:
     call.add_argument("--output", default=None, help="Write JSON to this file instead of stdout.")
     call.set_defaults(func=cmd_call)
 
+    prove = subparsers.add_parser("prove", help="Submit an LLM request and capture a proof bundle.")
+    prove.add_argument("--server", default="http://127.0.0.1:8080")
+    prove.add_argument("--provider-id", default=None, help="Override the request provider_id and route.")
+    prove.add_argument("--payload", default="-", help="Request payload JSON file or - for stdin.")
+    prove.add_argument("--output", default=None, help="Write JSON to this file instead of stdout.")
+    prove.set_defaults(func=cmd_prove)
+
+    proofs = subparsers.add_parser("proofs", help="Inspect proofs captured by the service.")
+    proofs_sub = proofs.add_subparsers(dest="proofs_command", required=True)
+
+    proofs_list = proofs_sub.add_parser("list", help="List proofs.")
+    proofs_list.add_argument("--server", default="http://127.0.0.1:8080")
+    proofs_list.add_argument("--output", default=None, help="Write JSON to this file instead of stdout.")
+    proofs_list.set_defaults(func=cmd_proofs_list)
+
+    proofs_show = proofs_sub.add_parser("show", help="Describe a single proof.")
+    proofs_show.add_argument("proof_id")
+    proofs_show.add_argument("--server", default="http://127.0.0.1:8080")
+    proofs_show.add_argument("--output", default=None, help="Write JSON to this file instead of stdout.")
+    proofs_show.set_defaults(func=cmd_proofs_show)
+
+    bundle = subparsers.add_parser("bundle", help="Create or verify proof bundles.")
+    bundle_sub = bundle.add_subparsers(dest="bundle_command", required=True)
+
+    bundle_create = bundle_sub.add_parser("create", help="Create a bundle directory from a running service.")
+    bundle_create.add_argument("--server", default="http://127.0.0.1:8080")
+    bundle_create.add_argument("--bundle", required=True, help="Output bundle directory.")
+    bundle_create.add_argument("--output", default=None, help="Write JSON to this file instead of stdout.")
+    bundle_create.set_defaults(func=cmd_bundle_create)
+
+    bundle_verify = bundle_sub.add_parser("verify", help="Verify a bundle directory offline.")
+    bundle_verify.add_argument("--bundle", required=True, help="Bundle directory to verify.")
+    bundle_verify.add_argument("--public-key-file", default=None, help="Optional service public key file.")
+    bundle_verify.add_argument("--output", default=None, help="Write JSON to this file instead of stdout.")
+    bundle_verify.set_defaults(func=cmd_bundle_verify)
+
     verify = subparsers.add_parser("verify", help="Verify a signed receipt.")
-    verify.add_argument("--receipt", required=True, help="Receipt JSON file or - for stdin.")
+    verify.add_argument("--receipt", default=None, help="Receipt JSON file or - for stdin.")
+    verify.add_argument("--proof", default=None, help="Proof JSON file or - for stdin.")
     verify.add_argument("--request", default=None, help="Optional request JSON file.")
     verify.add_argument("--response", default=None, help="Optional response JSON file.")
     verify.add_argument(

@@ -16,7 +16,7 @@ dependencies = [
 dev = []
 
 [project.scripts]
-minibridge = "llm_api_proof.cli:main"
+minibridge = "minibridge.app.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

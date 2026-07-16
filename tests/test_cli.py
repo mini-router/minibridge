@@ -142,7 +142,7 @@ class CliTests(unittest.TestCase):
                 nonce="nonce-state",
                 expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
             )
-            response, receipt = service.call(MockProvider(), request)
+            response, receipt, proof = service.prove(MockProvider(), request)
             save_state(state_path, service, registry)
             self.assertTrue(state_path.exists())
 
@@ -156,6 +156,7 @@ class CliTests(unittest.TestCase):
 
             self.assertEqual(reloaded_service.service_id, "svc-state")
             self.assertEqual(reloaded_service.receipts[0].receipt_id, receipt.receipt_id)
+            self.assertEqual(reloaded_service.proofs[0].proof_id, proof.proof_id)
             self.assertEqual(reloaded_service.get_key("alice", "k1").spent_usd, service.get_key("alice", "k1").spent_usd)
             self.assertEqual(reloaded_registry.get("mock").describe().provider_id, "mock")
             result = verify_receipt(receipt, reloaded_signer.public_key, reloaded_service.pricing_table, request=request, response=response)

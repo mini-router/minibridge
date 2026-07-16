@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .cli import main
+from minibridge.app.cli import main
 
 
 if __name__ == "__main__":

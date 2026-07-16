@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from llm_api_proof.cli import main
+from .app.cli import main
 
 
 if __name__ == "__main__":

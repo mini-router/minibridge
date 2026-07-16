@@ -273,3 +273,59 @@ class Receipt:
             attestation=dict(payload.get("attestation") or {}),
             signature=payload.get("signature"),
         )
+
+
+@dataclass(frozen=True)
+class Proof:
+    proof_id: str
+    proof_version: str
+    service_id: str
+    request: LLMRequest
+    response: LLMResponse
+    receipt: Receipt
+    created_at: str
+
+    def payload_dict(self) -> dict[str, Any]:
+        return {
+            "proof_id": self.proof_id,
+            "proof_version": self.proof_version,
+            "service_id": self.service_id,
+            "request": self.request.to_dict(),
+            "response": self.response.to_dict(),
+            "receipt": self.receipt.to_dict(),
+            "created_at": self.created_at,
+        }
+
+    def summary_dict(self) -> dict[str, Any]:
+        return {
+            "proof_id": self.proof_id,
+            "proof_version": self.proof_version,
+            "service_id": self.service_id,
+            "request_id": self.request.request_id,
+            "provider_id": self.request.provider_id,
+            "model": self.request.model,
+            "receipt_id": self.receipt.receipt_id,
+            "created_at": self.created_at,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.payload_dict()
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "Proof":
+        request_payload = payload.get("request")
+        response_payload = payload.get("response")
+        receipt_payload = payload.get("receipt")
+        if not isinstance(request_payload, Mapping) or not isinstance(response_payload, Mapping) or not isinstance(
+            receipt_payload, Mapping
+        ):
+            raise ValueError("proof payload must include request, response, and receipt objects")
+        return cls(
+            proof_id=str(payload["proof_id"]),
+            proof_version=str(payload.get("proof_version") or "minibridge-proof-1"),
+            service_id=str(payload["service_id"]),
+            request=LLMRequest.from_dict(request_payload),
+            response=LLMResponse.from_dict(response_payload),
+            receipt=Receipt.from_dict(receipt_payload),
+            created_at=str(payload["created_at"]),
+        )

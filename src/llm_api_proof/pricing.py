@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Iterable
-
 from .models import Usage
 
 
@@ -36,4 +34,3 @@ class PricingTable:
         input_cost = (Decimal(input_tokens) / Decimal(1000)) * price.input_per_1k
         output_cost = (Decimal(max_output_tokens) / Decimal(1000)) * price.output_per_1k
         return (input_cost + output_cost).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
-

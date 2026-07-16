@@ -6,10 +6,10 @@ from typing import Any
 import json
 import os
 
-from .models import Receipt
+from .models import Proof, Receipt
 from .provider import ProviderRegistry
 from .service import LLMProofService, RegisteredKey
-from .attestation import MockAttestationProvider, StaticAttestationProvider
+from .attestation import FileAttestationProvider, MockAttestationProvider, StaticAttestationProvider
 
 
 def _json_default(value: Any) -> Any:
@@ -46,6 +46,12 @@ def save_state(path: str | Path, service: LLMProofService, provider_registry: Pr
             "mode": attestation_provider.mode,
             "evidence": dict(attestation_provider.evidence),
         }
+    elif isinstance(attestation_provider, FileAttestationProvider):
+        attestation_provider_payload = {
+            "kind": "file",
+            "mode": attestation_provider.mode,
+            "path": attestation_provider.path,
+        }
 
     state_path = Path(path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +60,7 @@ def save_state(path: str | Path, service: LLMProofService, provider_registry: Pr
         "service_id": service.service_id,
         "tee_mode": service.tee_mode,
         "attestation": dict(service.attestation),
+        "attestation_policy": service.attestation_policy.to_dict() if getattr(service, "attestation_policy", None) is not None else None,
         "attestation_provider": attestation_provider_payload,
         "pricing_table": {
             "pricing_table_id": service.pricing_table.pricing_table_id,
@@ -69,6 +76,7 @@ def save_state(path: str | Path, service: LLMProofService, provider_registry: Pr
         "providers": [provider.describe().to_dict() for provider in provider_registry.providers.values()],
         "keys": service.export_keys(),
         "receipts": service.export_receipts(),
+        "proofs": service.export_proofs(),
     }
 
     tmp_path = state_path.with_suffix(state_path.suffix + ".tmp")
@@ -84,3 +92,7 @@ def restore_keys(service: LLMProofService, keys_payload: list[dict[str, Any]]) -
 
 def restore_receipts(service: LLMProofService, receipts_payload: list[dict[str, Any]]) -> None:
     service.load_receipts([Receipt.from_dict(dict(receipt)) for receipt in receipts_payload])
+
+
+def restore_proofs(service: LLMProofService, proofs_payload: list[dict[str, Any]]) -> None:
+    service.load_proofs([Proof.from_dict(dict(proof)) for proof in proofs_payload])

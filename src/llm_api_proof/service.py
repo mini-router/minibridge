@@ -7,8 +7,15 @@ from decimal import Decimal
 from typing import Any
 import uuid
 
-from .attestation import AttestationEvidence, AttestationProvider
-from .models import KeyPolicy, LLMRequest, LLMResponse, Receipt
+from .attestation import (
+    AttestationEvidence,
+    AttestationPolicy,
+    AttestationProvider,
+    AttestationVerificationResult,
+    MockAttestationProvider,
+    verify_attestation_evidence,
+)
+from .models import KeyPolicy, LLMRequest, LLMResponse, Proof, Receipt
 from .pricing import PricingTable
 from .provider import LLMProvider
 from .signing import ReceiptSigner
@@ -98,6 +105,8 @@ class LLMProofService:
         tee_mode: str | None = None,
         attestation: dict[str, Any] | None = None,
         attestation_provider: AttestationProvider | None = None,
+        attestation_policy: AttestationPolicy | dict[str, Any] | None = None,
+        attestation_context: dict[str, Any] | None = None,
     ) -> None:
         self.service_id = service_id
         self.signer = signer
@@ -105,13 +114,34 @@ class LLMProofService:
         self.attestation_provider = attestation_provider
         self.tee_mode = tee_mode or (attestation_provider.mode if attestation_provider is not None else "tee-ready-mock")
         self.attestation = attestation or {}
+        if attestation_policy is None or isinstance(attestation_policy, AttestationPolicy):
+            self.attestation_policy = attestation_policy
+        else:
+            self.attestation_policy = AttestationPolicy.from_dict(attestation_policy)
+        self.attestation_evidence: AttestationEvidence | None = None
+        self.attestation_verification: AttestationVerificationResult | None = None
+        self._attestation_verified = attestation_provider is None
         self._keys: dict[tuple[str, str], RegisteredKey] = {}
         self._receipts: list[Receipt] = []
+        self._proofs: list[Proof] = []
         self._seen_request_ids: set[tuple[str, str, str]] = set()
+        if (
+            self.attestation_provider is not None
+            and self.attestation_policy is None
+            and attestation_context is None
+            and isinstance(self.attestation_provider, MockAttestationProvider)
+        ):
+            self.seal_attestation()
+        elif self.attestation_provider is not None and attestation_context is not None:
+            self.seal_attestation(context=attestation_context)
 
     @property
     def receipts(self) -> list[Receipt]:
         return list(self._receipts)
+
+    @property
+    def proofs(self) -> list[Proof]:
+        return list(self._proofs)
 
     def load_key(self, record: RegisteredKey) -> RegisteredKey:
         self._keys[(record.owner_id, record.key_id)] = record
@@ -123,11 +153,108 @@ class LLMProofService:
             (receipt.owner_id, receipt.key_id, receipt.request_id) for receipt in self._receipts
         }
 
+    def load_proofs(self, proofs: list[Proof]) -> None:
+        self._proofs = list(proofs)
+        receipt_ids = {receipt.receipt_id for receipt in self._receipts}
+        for proof in self._proofs:
+            if proof.receipt.receipt_id not in receipt_ids:
+                self._receipts.append(proof.receipt)
+                receipt_ids.add(proof.receipt.receipt_id)
+            self._seen_request_ids.add((proof.request.owner_id, proof.request.key_id, proof.request.request_id))
+
+    def get_proof(self, proof_id: str) -> Proof:
+        for proof in self._proofs:
+            if proof.proof_id == proof_id:
+                return proof
+        raise KeyError(f"unknown proof {proof_id!r}")
+
     def export_keys(self) -> list[dict[str, Any]]:
         return [record.to_dict() for record in self._keys.values()]
 
     def export_receipts(self) -> list[dict[str, Any]]:
         return [receipt.to_dict() for receipt in self._receipts]
+
+    def export_proofs(self) -> list[dict[str, Any]]:
+        return [proof.to_dict() for proof in self._proofs]
+
+    def attestation_status(self) -> dict[str, Any]:
+        evidence = self.attestation_evidence.to_dict() if self.attestation_evidence is not None else dict(self.attestation)
+        evidence = {
+            **evidence,
+            "service_id": self.service_id,
+            "service_public_key_fingerprint": self.signer.public_key_fingerprint,
+        }
+        return {
+            "verified": self._attestation_verified,
+            "service_id": self.service_id,
+            "service_public_key_fingerprint": self.signer.public_key_fingerprint,
+            "service_public_key": self.signer.export_public_key(),
+            "policy": self.attestation_policy.to_dict() if self.attestation_policy is not None else None,
+            "evidence": evidence,
+            "verification": (
+                {
+                    "ok": self.attestation_verification.ok,
+                    "errors": list(self.attestation_verification.errors),
+                    "expected_context_hash": self.attestation_verification.expected_context_hash,
+                }
+                if self.attestation_verification is not None
+                else None
+            ),
+        }
+
+    def build_attestation_context(
+        self,
+        *,
+        provider_registry: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        context: dict[str, Any] = {
+            "service_id": self.service_id,
+            "tee_mode": self.tee_mode,
+            "pricing_table_id": self.pricing_table.pricing_table_id,
+            "service_public_key_fingerprint": self.signer.public_key_fingerprint,
+            "providers": sorted(provider_registry.keys()) if provider_registry is not None else [],
+            "key_ids": sorted(f"{owner_id}/{key_id}" for owner_id, key_id in self._keys),
+        }
+        if extra:
+            context.update(extra)
+        return context
+
+    def seal_attestation(
+        self,
+        *,
+        context: dict[str, Any] | None = None,
+        policy: AttestationPolicy | dict[str, Any] | None = None,
+    ) -> AttestationVerificationResult | None:
+        if self.attestation_provider is None:
+            self._attestation_verified = True
+            return None
+
+        if policy is not None:
+            self.attestation_policy = policy if isinstance(policy, AttestationPolicy) else AttestationPolicy.from_dict(policy)
+
+        context = context or {}
+        evidence = self.attestation_provider.collect(context)
+        if not isinstance(evidence, AttestationEvidence):
+            raise TypeError("attestation provider must return AttestationEvidence")
+
+        verification = verify_attestation_evidence(evidence, policy=self.attestation_policy, context=context)
+        if not verification.ok:
+            raise ProofServiceError("attestation verification failed: " + "; ".join(verification.errors))
+
+        self.attestation_evidence = evidence
+        self.attestation_verification = verification
+        self.attestation = {
+            **evidence.to_dict(),
+            "verified": True,
+            "verification": {
+                "ok": verification.ok,
+                "errors": list(verification.errors),
+                "expected_context_hash": verification.expected_context_hash,
+            },
+        }
+        self._attestation_verified = True
+        return verification
 
     def register_key(
         self,
@@ -162,6 +289,29 @@ class LLMProofService:
         self.get_key(owner_id, key_id).active = False
 
     def call(self, provider: LLMProvider, request: LLMRequest) -> tuple[LLMResponse, Receipt]:
+        response, receipt = self._execute(provider, request)
+        self._receipts.append(receipt)
+        self._seen_request_ids.add((request.owner_id, request.key_id, request.request_id))
+        return response, receipt
+
+    def prove(self, provider: LLMProvider, request: LLMRequest) -> tuple[LLMResponse, Receipt, Proof]:
+        response, receipt = self._execute(provider, request)
+        proof = Proof(
+            proof_id=receipt.receipt_id,
+            proof_version="minibridge-proof-1",
+            service_id=self.service_id,
+            request=request,
+            response=response,
+            receipt=receipt,
+            created_at=receipt.issued_at,
+        )
+        self._receipts.append(receipt)
+        self._proofs.append(proof)
+        self._seen_request_ids.add((request.owner_id, request.key_id, request.request_id))
+        return response, receipt, proof
+
+    def _execute(self, provider: LLMProvider, request: LLMRequest) -> tuple[LLMResponse, Receipt]:
+        self._ensure_attested()
         key = self.get_key(request.owner_id, request.key_id)
         if not key.active:
             raise KeyDisabledError(f"key {request.owner_id}/{request.key_id} is disabled")
@@ -216,9 +366,15 @@ class LLMProofService:
             attestation=self._collect_attestation(request, response),
         )
         receipt = self._sign_receipt(receipt)
-        self._receipts.append(receipt)
-        self._seen_request_ids.add((request.owner_id, request.key_id, request.request_id))
         return response, receipt
+
+    def _ensure_attested(self) -> None:
+        if self._attestation_verified:
+            return
+        if self.attestation_provider is None:
+            self._attestation_verified = True
+            return
+        self.seal_attestation(context=self.build_attestation_context())
 
     def _reject_replay(self, request: LLMRequest) -> None:
         key = (request.owner_id, request.key_id, request.request_id)
@@ -255,22 +411,14 @@ class LLMProofService:
             raise ExpiredKeyPolicyError(f"key policy for {key.owner_id}/{key.key_id} has expired at {key.policy.expires_at!r}")
 
     def _collect_attestation(self, request: LLMRequest, response: LLMResponse) -> dict[str, Any]:
-        context = {
-            "service_id": self.service_id,
-            "tee_mode": self.tee_mode,
-            "request_hash": request.fingerprint(),
-            "response_hash": response.fingerprint(),
-            "model": request.model,
-        }
         evidence = dict(self.attestation)
-        if self.attestation_provider is not None:
-            attestation = self.attestation_provider.collect(context)
-            if isinstance(attestation, AttestationEvidence):
-                evidence.update(attestation.to_dict())
-            else:
-                evidence.update(attestation)
-        else:
-            evidence.update(context)
+        evidence.update(
+            {
+                "request_hash": request.fingerprint(),
+                "response_hash": response.fingerprint(),
+                "model": request.model,
+            }
+        )
         return evidence
 
     def _sign_receipt(self, receipt: Receipt) -> Receipt:

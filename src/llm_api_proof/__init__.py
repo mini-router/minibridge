@@ -1,6 +1,16 @@
-from .attestation import AttestationEvidence, AttestationProvider, MockAttestationProvider, StaticAttestationProvider
+from .attestation import (
+    AttestationEvidence,
+    AttestationPolicy,
+    AttestationProvider,
+    AttestationVerificationResult,
+    FileAttestationProvider,
+    MockAttestationProvider,
+    StaticAttestationProvider,
+    verify_attestation_evidence,
+)
+from .bundle import BundleVerificationResult, ProofBundle, ProofBundleManifest, build_bundle, verify_bundle, write_bundle
 from .http_server import make_handler, run_server
-from .models import KeyPolicy, LLMRequest, LLMResponse, Receipt, Usage
+from .models import KeyPolicy, LLMRequest, LLMResponse, Proof, Receipt, Usage
 from .pricing import ModelPrice, PricingTable
 from .provider import (
     LLMProvider,
@@ -28,13 +38,24 @@ from .verifier import VerificationResult, verify_receipt
 __all__ = [
     "LLMRequest",
     "LLMResponse",
+    "Proof",
     "Receipt",
     "Usage",
     "KeyPolicy",
     "AttestationEvidence",
+    "AttestationPolicy",
     "AttestationProvider",
+    "AttestationVerificationResult",
+    "FileAttestationProvider",
     "MockAttestationProvider",
     "StaticAttestationProvider",
+    "verify_attestation_evidence",
+    "BundleVerificationResult",
+    "ProofBundle",
+    "ProofBundleManifest",
+    "build_bundle",
+    "verify_bundle",
+    "write_bundle",
     "make_handler",
     "run_server",
     "ModelPrice",

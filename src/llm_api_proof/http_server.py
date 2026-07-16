@@ -8,16 +8,11 @@ import json
 import re
 import sys
 
-from .models import KeyPolicy, LLMRequest, LLMResponse, Receipt
+from .models import KeyPolicy, LLMRequest, LLMResponse, Proof, Receipt
+from .bundle import build_bundle
 from .provider import (
-    MockProvider,
-    OpenAICompatibleProvider,
-    ProviderDescriptor,
     ProviderRegistry,
     build_provider_from_payload,
-    make_chutes_provider,
-    make_openai_provider,
-    make_openrouter_provider,
 )
 from .service import LLMProofService
 from .verifier import verify_receipt
@@ -70,6 +65,13 @@ def _parse_provider_describe_path(path: str) -> str | None:
     return match.group(1)
 
 
+def _parse_proof_describe_path(path: str) -> str | None:
+    match = re.fullmatch(r"/proofs/([^/]+)", path)
+    if match is None:
+        return None
+    return match.group(1)
+
+
 def _maybe_save_state(state_save: Callable[[], None] | None) -> None:
     if state_save is None:
         return
@@ -77,6 +79,19 @@ def _maybe_save_state(state_save: Callable[[], None] | None) -> None:
         state_save()
     except Exception as exc:
         print(f"warning: state save failed: {exc}", file=sys.stderr)
+
+
+def _build_bundle_payload(service: LLMProofService) -> Any:
+    attestation = service.attestation_status()
+    bundle = build_bundle(
+        service.proofs,
+        service_id=service.service_id,
+        tee_mode=service.tee_mode,
+        service_public_key=attestation["service_public_key"],
+        service_public_key_fingerprint=attestation["service_public_key_fingerprint"],
+        attestation=attestation,
+    )
+    return bundle
 
 
 def make_handler(service: LLMProofService, provider_registry: ProviderRegistry) -> type[BaseHTTPRequestHandler]:
@@ -99,14 +114,62 @@ def make_handler_with_state(
 
         def do_GET(self) -> None:  # noqa: N802
             provider_id = _parse_provider_describe_path(self.path)
+            proof_id = _parse_proof_describe_path(self.path)
             if self.path == "/health":
                 _write_json(self, 200, {"ok": True, "service_id": service.service_id})
+                return
+            if self.path == "/attestation":
+                _write_json(self, 200, {"ok": True, "attestation": service.attestation_status()})
+                return
+            if self.path in {"/bundle", "/bundle/export"}:
+                try:
+                    bundle = _build_bundle_payload(service)
+                    _write_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "bundle": bundle.to_dict(),
+                        },
+                    )
+                except Exception as exc:
+                    _write_json(self, 400, {"ok": False, "error": str(exc)})
+                return
+            if self.path == "/bundle/manifest":
+                try:
+                    bundle = _build_bundle_payload(service)
+                    _write_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "manifest": bundle.manifest.to_dict(),
+                            "counts": {
+                                "raw_proofs": len(bundle.raw_proofs),
+                                "verified_proofs": len(bundle.verified_proofs),
+                                "validation_rows": len(bundle.validation_report),
+                            },
+                            "attestation_verified": bool(bundle.attestation and bundle.attestation.get("verified")),
+                        },
+                    )
+                except Exception as exc:
+                    _write_json(self, 400, {"ok": False, "error": str(exc)})
                 return
             if self.path == "/receipts":
                 _write_json(self, 200, {"receipts": [receipt.to_dict() for receipt in service.receipts]})
                 return
+            if self.path == "/proofs":
+                _write_json(self, 200, {"proofs": [proof.summary_dict() for proof in service.proofs]})
+                return
             if self.path == "/providers":
                 _write_json(self, 200, {"providers": [descriptor.to_dict() for descriptor in provider_registry.list()]})
+                return
+            if proof_id is not None:
+                try:
+                    proof = service.get_proof(proof_id)
+                    _write_json(self, 200, {"ok": True, "proof": proof.to_dict()})
+                except Exception as exc:
+                    _write_json(self, 404, {"ok": False, "error": str(exc)})
                 return
             if provider_id is not None:
                 try:
@@ -172,6 +235,48 @@ def make_handler_with_state(
                     _write_json(self, 400, {"ok": False, "error": str(exc)})
                 return
 
+            provider_prove_id = None
+            if self.path == "/prove":
+                provider_prove_id = None
+            else:
+                match = re.fullmatch(r"/providers/([^/]+)/prove", self.path)
+                if match is not None:
+                    provider_prove_id = match.group(1)
+
+            if self.path == "/prove" or provider_prove_id is not None:
+                try:
+                    request_provider_id = str(payload.get("provider_id") or provider_prove_id or "mock")
+                    request = LLMRequest(
+                        request_id=payload["request_id"],
+                        provider_id=request_provider_id,
+                        caller_id=payload["caller_id"],
+                        owner_id=payload["owner_id"],
+                        key_id=payload["key_id"],
+                        model=payload["model"],
+                        messages=payload["messages"],
+                        parameters=payload.get("parameters") or {},
+                        metadata=payload.get("metadata") or {},
+                        nonce=payload.get("nonce"),
+                        expires_at=payload.get("expires_at"),
+                    )
+                    provider = self._resolve_provider(request.provider_id)
+                    response, receipt, proof = service.prove(provider, request)
+                    _maybe_save_state(state_save)
+                    _write_json(
+                        self,
+                        200,
+                        {
+                            "ok": True,
+                            "provider": provider.describe().to_dict(),
+                            "response": response.to_dict(),
+                            "receipt": receipt.to_dict(),
+                            "proof": proof.to_dict(),
+                        },
+                    )
+                except Exception as exc:
+                    _write_json(self, 400, {"ok": False, "error": str(exc)})
+                return
+
             provider_call_id = _parse_provider_call_path(self.path)
             if self.path == "/call" or provider_call_id is not None:
                 try:
@@ -208,9 +313,24 @@ def make_handler_with_state(
 
             if self.path == "/verify":
                 try:
-                    receipt = Receipt.from_dict(payload["receipt"])
-                    request = LLMRequest.from_dict(payload["request"]) if "request" in payload else None
-                    response = LLMResponse.from_dict(payload["response"]) if "response" in payload else None
+                    proof = Proof.from_dict(payload["proof"]) if "proof" in payload else None
+                    receipt = Receipt.from_dict(payload["receipt"]) if "receipt" in payload else proof.receipt if proof else None
+                    request = (
+                        LLMRequest.from_dict(payload["request"])
+                        if "request" in payload
+                        else proof.request
+                        if proof is not None
+                        else None
+                    )
+                    response = (
+                        LLMResponse.from_dict(payload["response"])
+                        if "response" in payload
+                        else proof.response
+                        if proof is not None
+                        else None
+                    )
+                    if receipt is None:
+                        raise ValueError("verify requires receipt or proof")
                     result = verify_receipt(
                         receipt,
                         service.signer.public_key,

@@ -36,6 +36,35 @@ export type Receipt = {
   signature?: string | null;
 };
 
+export type BundleManifest = {
+  version: string;
+  generator_version: string;
+  bundle_kind: string;
+  service_id: string;
+  service_public_key_fingerprint: string;
+  service_public_key: string;
+  tee_mode: string;
+  raw_proof_count: number;
+  proof_count: number;
+  merkle_root: string;
+  created_at: string;
+  proof_ids: string[];
+  attestation_hash?: string | null;
+  attestation_verified: boolean;
+  validation?: Record<string, unknown>;
+};
+
+export type BundleManifestResponse = {
+  ok: boolean;
+  manifest: BundleManifest;
+  counts: {
+    raw_proofs: number;
+    verified_proofs: number;
+    validation_rows: number;
+  };
+  attestation_verified: boolean;
+};
+
 export type ResponsePayload = {
   ok: boolean;
   error?: string;

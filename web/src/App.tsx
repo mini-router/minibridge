@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  getBundleManifest,
   callMinibridge,
   getHealth,
   listProviders,
@@ -8,7 +9,7 @@ import {
   registerProvider,
   verifyReceipt,
 } from "./api";
-import type { ProviderDescriptor, Receipt } from "./types";
+import type { BundleManifest, ProviderDescriptor, Receipt } from "./types";
 
 const demoRequest = {
   request_id: "req-ui-001",
@@ -51,6 +52,9 @@ export default function App() {
   const [health, setHealth] = useState<unknown>(null);
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [bundleManifest, setBundleManifest] = useState<BundleManifest | null>(null);
+  const [bundleCounts, setBundleCounts] = useState<{ raw_proofs: number; verified_proofs: number; validation_rows: number } | null>(null);
+  const [bundleAttested, setBundleAttested] = useState<boolean | null>(null);
   const [providerPayload, setProviderPayload] = useState(formatJson(demoProvider));
   const [keyPayload, setKeyPayload] = useState(formatJson(demoKey));
   const [requestPayload, setRequestPayload] = useState(formatJson(demoRequest));
@@ -67,21 +71,26 @@ export default function App() {
     () => ({
       providers: providers.length,
       receipts: receipts.length,
+      proofs: bundleManifest?.proof_count ?? 0,
     }),
-    [providers.length, receipts.length]
+    [providers.length, receipts.length, bundleManifest?.proof_count]
   );
 
   async function loadOverview() {
     setError(null);
     try {
-      const [healthResult, providersResult, receiptsResult] = await Promise.all([
+      const [healthResult, providersResult, receiptsResult, bundleResult] = await Promise.all([
         getHealth(baseUrl),
         listProviders(baseUrl),
         listReceipts(baseUrl),
+        getBundleManifest(baseUrl),
       ]);
       setHealth(healthResult);
       setProviders(providersResult.providers);
       setReceipts(receiptsResult.receipts);
+      setBundleManifest(bundleResult.manifest);
+      setBundleCounts(bundleResult.counts);
+      setBundleAttested(bundleResult.attestation_verified);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -163,6 +172,10 @@ export default function App() {
               <span>Receipts</span>
               <strong>{summary.receipts}</strong>
             </div>
+            <div>
+              <span>Bundle proofs</span>
+              <strong>{summary.proofs}</strong>
+            </div>
           </div>
         </div>
       </header>
@@ -181,6 +194,29 @@ export default function App() {
         <section className="panel">
           <h2>Receipts</h2>
           <pre>{formatJson(receipts)}</pre>
+        </section>
+
+        <section className="panel span-2">
+          <h2>Bundle manifest</h2>
+          <div className="status-grid">
+            <div>
+              <span>Verified proofs</span>
+              <strong>{bundleCounts?.verified_proofs ?? 0}</strong>
+            </div>
+            <div>
+              <span>Raw proofs</span>
+              <strong>{bundleCounts?.raw_proofs ?? 0}</strong>
+            </div>
+            <div>
+              <span>Attested</span>
+              <strong>{bundleAttested === null ? "n/a" : bundleAttested ? "yes" : "no"}</strong>
+            </div>
+            <div>
+              <span>Merkle root</span>
+              <strong>{bundleManifest?.merkle_root ? "set" : "n/a"}</strong>
+            </div>
+          </div>
+          <pre>{formatJson(bundleManifest ?? { ok: false, note: "Click Refresh" })}</pre>
         </section>
 
         <section className="panel">

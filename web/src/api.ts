@@ -1,4 +1,4 @@
-import type { ProviderDescriptor, Receipt, ResponsePayload } from "./types";
+import type { BundleManifestResponse, ProviderDescriptor, Receipt, ResponsePayload } from "./types";
 
 const jsonHeaders = {
   "Content-Type": "application/json",
@@ -39,6 +39,10 @@ export async function listProviders(baseUrl: string) {
 
 export async function listReceipts(baseUrl: string) {
   return requestJson<{ receipts: Receipt[] }>(baseUrl, "/receipts");
+}
+
+export async function getBundleManifest(baseUrl: string) {
+  return requestJson<BundleManifestResponse>(baseUrl, "/bundle/manifest");
 }
 
 export async function registerProvider(baseUrl: string, payload: unknown) {

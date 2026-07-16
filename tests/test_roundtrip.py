@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 import unittest
 from urllib.request import Request, urlopen
 
 from llm_api_proof import (
+    AttestationPolicy,
     KeyPolicy,
     MockAttestationProvider,
     LLMProofService,
@@ -16,9 +18,11 @@ from llm_api_proof import (
     ProviderRegistry,
     PricingTable,
     ReceiptSigner,
+    StaticAttestationProvider,
     verify_receipt,
 )
 from llm_api_proof.http_server import run_server
+from llm_api_proof.models import canonical_json
 
 
 class RoundTripTests(unittest.TestCase):
@@ -313,6 +317,158 @@ class RoundTripTests(unittest.TestCase):
             self.assertEqual(result["provider"]["provider_id"], "mock")
             self.assertEqual(result["receipt"]["provider_id"], "mock")
             self.assertEqual(result["receipt"]["provider_kind"], "mock")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_prove_http_route_and_proof_lookup(self) -> None:
+        signer = ReceiptSigner.generate()
+        pricing = PricingTable(
+            pricing_table_id="test-plan",
+            models={
+                "gpt-demo": ModelPrice(
+                    model="gpt-demo",
+                    input_per_1k=Decimal("0.0100"),
+                    output_per_1k=Decimal("0.0300"),
+                )
+            },
+        )
+        service = LLMProofService(
+            service_id="svc",
+            signer=signer,
+            pricing_table=pricing,
+            attestation_provider=MockAttestationProvider(service_instance_id="svc-test"),
+        )
+        registry = ProviderRegistry()
+        registry.register(MockProvider())
+        service.register_key(
+            owner_id="alice",
+            key_id="k1",
+            api_key="secret",
+            policy=KeyPolicy(
+                allowed_callers={"bob"},
+                allowed_models={"gpt-demo"},
+                require_nonce=True,
+                require_expiry=True,
+            ),
+        )
+
+        server = run_server("127.0.0.1", 0, service, registry)
+        try:
+            import threading
+
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            result = self._post_json(
+                f"http://{host}:{port}/prove",
+                {
+                    "request_id": "proof-route",
+                    "provider_id": "mock",
+                    "caller_id": "bob",
+                    "owner_id": "alice",
+                    "key_id": "k1",
+                    "model": "gpt-demo",
+                    "messages": [{"role": "user", "content": "hello proof"}],
+                    "nonce": "nonce-proof-route",
+                    "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+                },
+            )
+            self.assertTrue(result["ok"])
+            self.assertIn("proof", result)
+            proof_id = result["proof"]["proof_id"]
+            self.assertEqual(proof_id, result["receipt"]["receipt_id"])
+            proof = self._get_json(f"http://{host}:{port}/proofs/{proof_id}")
+            self.assertTrue(proof["ok"])
+            self.assertEqual(proof["proof"]["proof_id"], proof_id)
+            proofs = self._get_json(f"http://{host}:{port}/proofs")
+            self.assertEqual(proofs["proofs"][0]["proof_id"], proof_id)
+            verify = self._post_json(
+                f"http://{host}:{port}/verify",
+                {"proof": result["proof"]},
+            )
+            self.assertTrue(verify["result"]["valid_signature"])
+            self.assertTrue(verify["result"]["valid_request_hash"])
+            self.assertTrue(verify["result"]["valid_response_hash"])
+            self.assertTrue(verify["result"]["valid_cost"])
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_attestation_seal_and_http_status(self) -> None:
+        signer = ReceiptSigner.generate()
+        pricing = PricingTable(
+            pricing_table_id="test-plan",
+            models={
+                "gpt-demo": ModelPrice(
+                    model="gpt-demo",
+                    input_per_1k=Decimal("0.0100"),
+                    output_per_1k=Decimal("0.0300"),
+                )
+            },
+        )
+        context = {
+            "service_id": "svc",
+            "tee_mode": "cpu-tee",
+            "pricing_table_id": "test-plan",
+            "service_public_key_fingerprint": signer.public_key_fingerprint,
+            "providers": ["mock"],
+            "key_ids": ["alice/k1"],
+        }
+        evidence = {
+            "attestation_mode": "cpu-tee",
+            "attestation_backend": "file-attestation",
+            "service_instance_id": "tee-node-1",
+            "context_hash": sha256(canonical_json(context).encode("utf-8")).hexdigest(),
+            "measurement": "mrenclave-demo",
+            "report_data": "bind:" + sha256(canonical_json(context).encode("utf-8")).hexdigest(),
+            "claims": {
+                "service_id": "svc",
+                "service_public_key_fingerprint": signer.public_key_fingerprint,
+            },
+        }
+        service = LLMProofService(
+            service_id="svc",
+            signer=signer,
+            pricing_table=pricing,
+            tee_mode="cpu-tee",
+            attestation_provider=StaticAttestationProvider(mode="cpu-tee", evidence=evidence),
+            attestation_policy=AttestationPolicy(
+                expected_mode="cpu-tee",
+                expected_backend="file-attestation",
+                expected_service_id="svc",
+                expected_service_public_key_fingerprint=signer.public_key_fingerprint,
+                expected_measurement="mrenclave-demo",
+                expected_report_data_prefix="bind:",
+                required_claims={"service_id", "service_public_key_fingerprint"},
+            ),
+        )
+        registry = ProviderRegistry()
+        registry.register(MockProvider())
+        service.register_key(
+            owner_id="alice",
+            key_id="k1",
+            api_key="secret",
+            policy=KeyPolicy(
+                allowed_callers={"bob"},
+                allowed_models={"gpt-demo"},
+                require_nonce=True,
+                require_expiry=True,
+            ),
+        )
+        service.seal_attestation(context=context)
+
+        server = run_server("127.0.0.1", 0, service, registry)
+        try:
+            import threading
+
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            attestation = self._get_json(f"http://{host}:{port}/attestation")
+            self.assertTrue(attestation["ok"])
+            self.assertTrue(attestation["attestation"]["verified"])
+            self.assertEqual(attestation["attestation"]["evidence"]["attestation_mode"], "cpu-tee")
         finally:
             server.shutdown()
             server.server_close()

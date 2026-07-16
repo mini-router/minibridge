@@ -25,8 +25,12 @@ The service is split into two layers:
 The HTTP surface supports both generic and provider-specific calls:
 
 - `POST /call`
+- `POST /prove`
 - `POST /providers/{provider_id}/call`
+- `POST /providers/{provider_id}/prove`
 - `GET /providers`
+- `GET /proofs`
+- `GET /proofs/{proof_id}`
 - `POST /register-provider`
 
 ## What it proves
@@ -48,15 +52,12 @@ The HTTP surface supports both generic and provider-specific calls:
 
 ## Repo layout
 
-- `src/llm_api_proof/models.py` — request, response, usage, and receipt dataclasses
-- `src/llm_api_proof/pricing.py` — model pricing tables and cost computation
-- `src/llm_api_proof/signing.py` — Ed25519 signing utilities for receipts
-- `src/llm_api_proof/service.py` — the proof service that records and signs calls
-- `src/llm_api_proof/verifier.py` — offline receipt verification
-- `src/llm_api_proof/attestation.py` — pluggable attestation providers for mock or real TEE evidence
-- `src/llm_api_proof/http_server.py` — a minimal stdlib HTTP interface for the service
-- `src/llm_api_proof/provider.py` — provider registry, mock backend, and OpenAI-compatible backend helpers
-- `src/llm_api_proof/state.py` — JSON persistence for providers, keys, and receipts in prototype mode
+- `src/minibridge/core/` — shared domain objects: requests, receipts, proofs, pricing, signing, attestation, verification
+- `src/minibridge/providers/` — provider registry and OpenAI-compatible provider adapters
+- `src/minibridge/proof/` — the proof service and call/prove orchestration
+- `src/minibridge/transport/` — HTTP server and request handlers
+- `src/minibridge/app/` — CLI and local state persistence
+- `src/llm_api_proof/` — compatibility package that re-exports the Minibridge modules
 - `examples/mock_run.py` — end-to-end demo using the mock provider
 - `examples/http_demo.py` — end-to-end demo using the HTTP service
 - `docs/provider-registration.md` — provider registration payloads for OpenAI, OpenRouter, Chutes, and mock
@@ -112,10 +113,40 @@ Submit a request through the service:
 minibridge call --payload docs/request.json --server http://127.0.0.1:8080
 ```
 
+Capture a public proof bundle:
+
+```bash
+minibridge prove --payload docs/request.json --server http://127.0.0.1:8080
+```
+
+Create a SparkProof-style offline bundle from a running service:
+
+```bash
+minibridge bundle create --server http://127.0.0.1:8080 --bundle bundles/run-001
+```
+
+Verify that bundle on any CPU host:
+
+```bash
+minibridge bundle verify --bundle bundles/run-001
+```
+
+The HTTP API also exposes:
+
+- `GET /bundle`
+- `GET /bundle/export`
+- `GET /bundle/manifest`
+
 Verify a receipt offline:
 
 ```bash
 minibridge verify --receipt docs/receipt.json --public-key-file .minibridge-signing.key.pub
+```
+
+You can also verify a proof bundle directly:
+
+```bash
+minibridge verify --proof docs/proof.json --public-key-file .minibridge-signing.key.pub
 ```
 
 For unattended startup, use `minibridge serve --config <file>.json` with a bootstrap file that includes `pricing_table`, optional `providers`, and optional `keys`.
