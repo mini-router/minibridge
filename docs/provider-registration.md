@@ -109,7 +109,7 @@ Once registered, the service can route a request through a provider-specific end
 {
   "request_id": "req_001",
   "provider_id": "openrouter-prod",
-  "caller_id": "validator-1",
+  "caller_id": "minibridge-maintainer",
   "owner_id": "alice",
   "key_id": "alice-key",
   "model": "openai/gpt-5.2",

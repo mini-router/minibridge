@@ -100,7 +100,7 @@ curl -X POST http://127.0.0.1:7070/register-key \
     "key_id": "openrouter-prod-key",
     "api_key": "YOUR_SECRET_KEY",
     "policy": {
-      "allowed_callers": ["tester"],
+      "allowed_callers": ["minibridge-maintainer"],
       "allowed_models": ["openai/gpt-4o-mini"],
       "require_nonce": true,
       "require_expiry": true
@@ -122,7 +122,7 @@ curl -X POST http://127.0.0.1:7070/prove \
   -d '{
     "request_id": "req-001",
     "provider_id": "openrouter-prod",
-    "caller_id": "tester",
+    "caller_id": "minibridge-maintainer",
     "owner_id": "provider-owner",
     "key_id": "openrouter-prod-key",
     "model": "openai/gpt-4o-mini",

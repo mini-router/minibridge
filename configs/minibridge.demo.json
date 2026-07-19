@@ -27,7 +27,7 @@
       "key_id": "alice-key",
       "api_key": "sk-demo-secret",
       "policy": {
-        "allowed_callers": ["bob-agent"],
+        "allowed_callers": ["minibridge-maintainer"],
         "allowed_models": ["gpt-demo"],
         "spend_limit_usd": "1.00",
         "require_nonce": true,

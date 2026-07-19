@@ -24,7 +24,7 @@ const demoRunner = {
 const demoRequest = {
   request_id: "req-ui-001",
   provider_id: "mock",
-  caller_id: "bob-agent",
+  caller_id: "minibridge-maintainer",
   owner_id: "alice",
   key_id: "alice-key",
   model: "gpt-demo",
