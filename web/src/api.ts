@@ -1,4 +1,11 @@
-import type { BundleManifestResponse, ProviderDescriptor, Receipt, ResponsePayload } from "./types";
+import type {
+  BundleManifestResponse,
+  HostJobRecord,
+  ProviderDescriptor,
+  Receipt,
+  ResponsePayload,
+  RunnerRegistration,
+} from "./types";
 
 const jsonHeaders = {
   "Content-Type": "application/json",
@@ -45,6 +52,14 @@ export async function getBundleManifest(baseUrl: string) {
   return requestJson<BundleManifestResponse>(baseUrl, "/bundle/manifest");
 }
 
+export async function listRunners(baseUrl: string) {
+  return requestJson<{ runners: RunnerRegistration[] }>(baseUrl, "/runners");
+}
+
+export async function listJobs(baseUrl: string) {
+  return requestJson<{ jobs: HostJobRecord[] }>(baseUrl, "/jobs");
+}
+
 export async function registerProvider(baseUrl: string, payload: unknown) {
   return requestJson<{ ok: boolean; provider: ProviderDescriptor }>(baseUrl, "/register-provider", {
     method: "POST",
@@ -73,4 +88,37 @@ export async function verifyReceipt(baseUrl: string, payload: unknown) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function registerRunner(baseUrl: string, payload: unknown) {
+  return requestJson<{ ok: boolean; runner: RunnerRegistration }>(baseUrl, "/register-runner", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function submitJob(baseUrl: string, payload: unknown) {
+  return requestJson<{ ok: boolean; job: HostJobRecord }>(baseUrl, "/jobs", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getJob(baseUrl: string, jobId: string) {
+  return requestJson<{ ok: boolean; job: HostJobRecord }>(baseUrl, `/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function getJobManifest(baseUrl: string, jobId: string) {
+  return requestJson<{ ok: boolean; manifest: unknown; counts: unknown; attestation_verified: boolean }>(
+    baseUrl,
+    `/jobs/${encodeURIComponent(jobId)}/manifest`
+  );
+}
+
+export async function getJobBundle(baseUrl: string, jobId: string) {
+  return requestJson<{ ok: boolean; bundle: unknown }>(baseUrl, `/jobs/${encodeURIComponent(jobId)}/bundle`);
+}
+
+export async function verifyJob(baseUrl: string, jobId: string) {
+  return requestJson<{ ok: boolean; result: unknown }>(baseUrl, `/jobs/${encodeURIComponent(jobId)}/verify`);
 }

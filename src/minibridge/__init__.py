@@ -4,12 +4,14 @@ from .core.attestation import (
     AttestationPolicy,
     AttestationProvider,
     AttestationVerificationResult,
+    DstackSocketAttestationProvider,
     FileAttestationProvider,
     MockAttestationProvider,
     StaticAttestationProvider,
     verify_attestation_evidence,
 )
 from .bundle.service import BundleVerificationResult, ProofBundle, ProofBundleManifest, build_bundle, verify_bundle, write_bundle
+from .host_control import HostControlPlane, HostJobRecord, RunnerRegistration, load_host_state, restore_host_state, save_host_state
 from .core.models import KeyPolicy, LLMRequest, LLMResponse, Proof, Receipt, Usage
 from .core.pricing import ModelPrice, PricingTable
 from .core.signing import ReceiptSigner
@@ -37,6 +39,7 @@ from .providers.base import (
     make_openai_provider,
     make_openrouter_provider,
 )
+from .host_http_server import make_handler as make_host_handler, run_host_server
 from .transport.http_server import make_handler, make_handler_with_state, run_server
 
 __all__ = [
@@ -45,6 +48,7 @@ __all__ = [
     "AttestationPolicy",
     "AttestationProvider",
     "AttestationVerificationResult",
+    "DstackSocketAttestationProvider",
     "FileAttestationProvider",
     "MockAttestationProvider",
     "StaticAttestationProvider",
@@ -55,6 +59,12 @@ __all__ = [
     "build_bundle",
     "verify_bundle",
     "write_bundle",
+    "HostControlPlane",
+    "HostJobRecord",
+    "RunnerRegistration",
+    "load_host_state",
+    "restore_host_state",
+    "save_host_state",
     "KeyPolicy",
     "LLMRequest",
     "LLMResponse",
@@ -87,5 +97,7 @@ __all__ = [
     "make_openrouter_provider",
     "make_handler",
     "make_handler_with_state",
+    "make_host_handler",
     "run_server",
+    "run_host_server",
 ]

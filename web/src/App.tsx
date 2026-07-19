@@ -1,15 +1,25 @@
 import { useMemo, useState } from "react";
 import {
   getBundleManifest,
-  callMinibridge,
   getHealth,
-  listProviders,
-  listReceipts,
-  registerKey,
-  registerProvider,
-  verifyReceipt,
+  getJob,
+  getJobManifest,
+  listJobs,
+  listRunners,
+  registerRunner,
+  submitJob,
+  verifyJob,
 } from "./api";
-import type { BundleManifest, ProviderDescriptor, Receipt } from "./types";
+import type { BundleManifest, HostJobRecord, RunnerRegistration } from "./types";
+
+const demoRunner = {
+  runner_id: "runner-1",
+  endpoint_url: "http://127.0.0.1:8081",
+  notes: {
+    region: "local",
+    role: "cpu-tee-runner",
+  },
+};
 
 const demoRequest = {
   request_id: "req-ui-001",
@@ -25,22 +35,10 @@ const demoRequest = {
   expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
 };
 
-const demoProvider = {
-  provider_id: "mock",
-  provider_kind: "mock",
-};
-
-const demoKey = {
-  owner_id: "alice",
-  key_id: "alice-key",
-  api_key: "sk-demo-secret",
-  policy: {
-    allowed_callers: ["bob-agent"],
-    allowed_models: ["gpt-demo"],
-    spend_limit_usd: "1.00",
-    require_nonce: true,
-    require_expiry: true,
-  },
+const demoJob = {
+  job_type: "prove",
+  runner_id: "runner-1",
+  request: demoRequest,
 };
 
 function formatJson(value: unknown) {
@@ -48,100 +46,96 @@ function formatJson(value: unknown) {
 }
 
 export default function App() {
-  const [baseUrl, setBaseUrl] = useState(import.meta.env.VITE_MINIBRIDGE_API_URL || "/api");
+  const [baseUrl, setBaseUrl] = useState(import.meta.env.VITE_MINIBRIDGE_HOST_URL || "/api");
   const [health, setHealth] = useState<unknown>(null);
-  const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
-  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [runners, setRunners] = useState<RunnerRegistration[]>([]);
+  const [jobs, setJobs] = useState<HostJobRecord[]>([]);
   const [bundleManifest, setBundleManifest] = useState<BundleManifest | null>(null);
-  const [bundleCounts, setBundleCounts] = useState<{ raw_proofs: number; verified_proofs: number; validation_rows: number } | null>(null);
-  const [bundleAttested, setBundleAttested] = useState<boolean | null>(null);
-  const [providerPayload, setProviderPayload] = useState(formatJson(demoProvider));
-  const [keyPayload, setKeyPayload] = useState(formatJson(demoKey));
-  const [requestPayload, setRequestPayload] = useState(formatJson(demoRequest));
-  const [verifyPayload, setVerifyPayload] = useState(
-    formatJson({
-      receipt: null,
-      request: demoRequest,
-    })
-  );
+  const [runnerPayload, setRunnerPayload] = useState(formatJson(demoRunner));
+  const [jobPayload, setJobPayload] = useState(formatJson(demoJob));
   const [output, setOutput] = useState<unknown>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const latestJob = useMemo(() => jobs[jobs.length - 1] ?? null, [jobs]);
   const summary = useMemo(
     () => ({
-      providers: providers.length,
-      receipts: receipts.length,
+      runners: runners.length,
+      jobs: jobs.length,
+      completedJobs: jobs.filter((job) => job.status === "completed").length,
       proofs: bundleManifest?.proof_count ?? 0,
     }),
-    [providers.length, receipts.length, bundleManifest?.proof_count]
+    [bundleManifest?.proof_count, jobs, runners.length]
   );
 
   async function loadOverview() {
     setError(null);
     try {
-      const [healthResult, providersResult, receiptsResult, bundleResult] = await Promise.all([
+      const [healthResult, runnersResult, jobsResult] = await Promise.all([
         getHealth(baseUrl),
-        listProviders(baseUrl),
-        listReceipts(baseUrl),
-        getBundleManifest(baseUrl),
+        listRunners(baseUrl),
+        listJobs(baseUrl),
       ]);
       setHealth(healthResult);
-      setProviders(providersResult.providers);
-      setReceipts(receiptsResult.receipts);
-      setBundleManifest(bundleResult.manifest);
-      setBundleCounts(bundleResult.counts);
-      setBundleAttested(bundleResult.attestation_verified);
+      setRunners(runnersResult.runners);
+      setJobs(jobsResult.jobs);
+
+      const candidateJob = jobsResult.jobs.find((job) => job.bundle?.manifest) ?? jobsResult.jobs[jobsResult.jobs.length - 1] ?? null;
+      if (candidateJob?.bundle?.manifest) {
+        setBundleManifest(candidateJob.bundle.manifest);
+      } else if (candidateJob?.status === "completed") {
+        const manifestResult = await getJobManifest(baseUrl, candidateJob.job_id);
+        setBundleManifest(manifestResult.manifest as BundleManifest);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function handleProviderAdd() {
+  async function handleRunnerAdd() {
     setError(null);
     try {
-      const payload = JSON.parse(providerPayload);
-      setOutput(await registerProvider(baseUrl, payload));
+      const payload = JSON.parse(runnerPayload);
+      setOutput(await registerRunner(baseUrl, payload));
       await loadOverview();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function handleKeyAdd() {
+  async function handleJobSubmit() {
     setError(null);
     try {
-      const payload = JSON.parse(keyPayload);
-      setOutput(await registerKey(baseUrl, payload));
-      await loadOverview();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  async function handleCall() {
-    setError(null);
-    try {
-      const payload = JSON.parse(requestPayload);
-      const result = await callMinibridge(baseUrl, payload);
+      const payload = JSON.parse(jobPayload);
+      const result = await submitJob(baseUrl, payload);
       setOutput(result);
-      setVerifyPayload(
-        formatJson({
-          receipt: result.receipt,
-          request: payload,
-          response: result.response,
-        })
-      );
+      if (result.job.bundle?.manifest) {
+        setBundleManifest(result.job.bundle.manifest);
+      }
       await loadOverview();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function handleVerify() {
+  async function handleVerifyLatestJob() {
     setError(null);
     try {
-      const payload = JSON.parse(verifyPayload);
-      setOutput(await verifyReceipt(baseUrl, payload));
+      if (!latestJob) {
+        throw new Error("no jobs available");
+      }
+      setOutput(await verifyJob(baseUrl, latestJob.job_id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function handleLoadLatestJob() {
+    setError(null);
+    try {
+      if (!latestJob) {
+        throw new Error("no jobs available");
+      }
+      setOutput(await getJob(baseUrl, latestJob.job_id));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -151,26 +145,30 @@ export default function App() {
     <div className="shell">
       <header className="hero">
         <div>
-          <p className="eyebrow">Minibridge web UI</p>
-          <h1>Proof receipts, API keys, and provider calls in one place.</h1>
+          <p className="eyebrow">Minibridge host control plane</p>
+          <h1>Runners, jobs, and bundle verification in one place.</h1>
           <p className="lede">
-            This UI is a separate frontend app boundary. It talks only to the Minibridge HTTP API.
+            The host stays public for orchestration and storage. CPU-TEE runners hold keys and produce proof bundles.
           </p>
         </div>
         <div className="status-card">
           <label>
-            API base URL
+            Host API base URL
             <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
           </label>
           <button onClick={loadOverview}>Refresh</button>
           <div className="status-grid">
             <div>
-              <span>Providers</span>
-              <strong>{summary.providers}</strong>
+              <span>Runners</span>
+              <strong>{summary.runners}</strong>
             </div>
             <div>
-              <span>Receipts</span>
-              <strong>{summary.receipts}</strong>
+              <span>Jobs</span>
+              <strong>{summary.jobs}</strong>
+            </div>
+            <div>
+              <span>Completed</span>
+              <strong>{summary.completedJobs}</strong>
             </div>
             <div>
               <span>Bundle proofs</span>
@@ -182,18 +180,33 @@ export default function App() {
 
       <main className="grid">
         <section className="panel">
-          <h2>Service status</h2>
+          <h2>Host status</h2>
           <pre>{formatJson(health ?? { ok: false, note: "Click Refresh" })}</pre>
         </section>
 
         <section className="panel">
-          <h2>Providers</h2>
-          <pre>{formatJson(providers)}</pre>
+          <h2>Runners</h2>
+          <pre>{formatJson(runners)}</pre>
+        </section>
+
+        <section className="panel span-2">
+          <h2>Jobs</h2>
+          <pre>{formatJson(jobs)}</pre>
         </section>
 
         <section className="panel">
-          <h2>Receipts</h2>
-          <pre>{formatJson(receipts)}</pre>
+          <h2>Register runner</h2>
+          <textarea value={runnerPayload} onChange={(event) => setRunnerPayload(event.target.value)} />
+          <button onClick={handleRunnerAdd}>Register</button>
+        </section>
+
+        <section className="panel">
+          <h2>Submit job</h2>
+          <textarea value={jobPayload} onChange={(event) => setJobPayload(event.target.value)} />
+          <div className="button-row">
+            <button onClick={handleJobSubmit}>Submit</button>
+            <button onClick={handleVerifyLatestJob}>Verify latest</button>
+          </div>
         </section>
 
         <section className="panel span-2">
@@ -201,50 +214,31 @@ export default function App() {
           <div className="status-grid">
             <div>
               <span>Verified proofs</span>
-              <strong>{bundleCounts?.verified_proofs ?? 0}</strong>
+              <strong>{bundleManifest?.proof_count ?? 0}</strong>
             </div>
             <div>
               <span>Raw proofs</span>
-              <strong>{bundleCounts?.raw_proofs ?? 0}</strong>
+              <strong>{bundleManifest?.raw_proof_count ?? 0}</strong>
             </div>
             <div>
               <span>Attested</span>
-              <strong>{bundleAttested === null ? "n/a" : bundleAttested ? "yes" : "no"}</strong>
+              <strong>
+                {bundleManifest == null ? "n/a" : bundleManifest.attestation_verified ? "yes" : "no"}
+              </strong>
             </div>
             <div>
               <span>Merkle root</span>
               <strong>{bundleManifest?.merkle_root ? "set" : "n/a"}</strong>
             </div>
           </div>
-          <pre>{formatJson(bundleManifest ?? { ok: false, note: "Click Refresh" })}</pre>
-        </section>
-
-        <section className="panel">
-          <h2>Register provider</h2>
-          <textarea value={providerPayload} onChange={(event) => setProviderPayload(event.target.value)} />
-          <button onClick={handleProviderAdd}>Submit</button>
-        </section>
-
-        <section className="panel">
-          <h2>Register key</h2>
-          <textarea value={keyPayload} onChange={(event) => setKeyPayload(event.target.value)} />
-          <button onClick={handleKeyAdd}>Submit</button>
-        </section>
-
-        <section className="panel">
-          <h2>Call Minibridge</h2>
-          <textarea value={requestPayload} onChange={(event) => setRequestPayload(event.target.value)} />
-          <button onClick={handleCall}>Call</button>
-        </section>
-
-        <section className="panel span-2">
-          <h2>Verify receipt</h2>
-          <textarea value={verifyPayload} onChange={(event) => setVerifyPayload(event.target.value)} />
-          <button onClick={handleVerify}>Verify</button>
+          <pre>{formatJson(bundleManifest ?? { note: "No bundle loaded yet" })}</pre>
         </section>
 
         <section className="panel span-2">
           <h2>Latest result</h2>
+          <div className="button-row">
+            <button onClick={handleLoadLatestJob}>Load latest job</button>
+          </div>
           <pre>{formatJson(output)}</pre>
         </section>
       </main>

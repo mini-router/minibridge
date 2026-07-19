@@ -23,7 +23,9 @@ from . import (
     verify_receipt,
 )
 from .bundle import ProofBundle, verify_bundle, write_bundle
-from .attestation import AttestationPolicy, FileAttestationProvider
+from .attestation import AttestationPolicy, DstackSocketAttestationProvider, FileAttestationProvider
+from .host_control import HostControlPlane, RunnerRegistration, load_host_state, restore_host_state, save_host_state
+from .host_http_server import run_host_server, _probe_runner
 from .http_server import run_server
 from .models import LLMRequest, LLMResponse, Proof, Receipt
 from .provider import build_provider_from_payload
@@ -123,6 +125,12 @@ def _build_attestation_provider(payload: dict[str, Any] | None) -> Any:
         if path is None:
             raise ValueError("file attestation provider requires a path")
         return FileAttestationProvider(path=str(path), mode=str(payload.get("mode") or "cpu-tee"))
+    if kind in {"dstack", "phala", "dstack-socket"}:
+        return DstackSocketAttestationProvider(
+            socket_path=str(payload.get("socket_path") or "/var/run/dstack.sock"),
+            mode=str(payload.get("mode") or "cpu-tee"),
+            backend=str(payload.get("backend") or "dstack-socket"),
+        )
     raise ValueError(f"unknown attestation provider kind {kind!r}")
 
 
@@ -243,6 +251,56 @@ def _bootstrap_runtime(args: Namespace) -> tuple[LLMProofService, ProviderRegist
     return service, registry, signer, public_key_file, state_file
 
 
+def _bootstrap_host(args: Namespace) -> tuple[HostControlPlane, Path | None]:
+    state_file_arg = getattr(args, "state_file", None)
+    state_file = Path(state_file_arg) if state_file_arg else None
+    state_payload = load_host_state(state_file) if state_file is not None else {}
+    if state_payload:
+        return restore_host_state(state_payload), state_file
+
+    config_payload: dict[str, Any] = {}
+    if getattr(args, "config", None) is not None:
+        config_payload = _load_json_source(args.config)
+        if not isinstance(config_payload, dict):
+            raise TypeError("host config must be a JSON object")
+
+    control = HostControlPlane(host_id=str(config_payload.get("host_id") or "host"))
+    for runner_payload in list(config_payload.get("runners") or []):
+        endpoint_url = str(runner_payload["endpoint_url"])
+        attestation = dict(runner_payload.get("attestation") or {})
+        service_id = runner_payload.get("service_id")
+        tee_mode = runner_payload.get("tee_mode")
+        auto_probe = bool(runner_payload.get("auto_probe", True))
+        if auto_probe:
+            try:
+                attestation_payload = _probe_runner(endpoint_url)
+                if attestation_payload.get("ok"):
+                    attestation = dict(attestation_payload.get("attestation") or attestation)
+                    evidence = dict(attestation.get("evidence") or {})
+                    service_id = attestation.get("service_id", service_id)
+                    tee_mode = evidence.get("attestation_mode", tee_mode)
+                else:
+                    print(
+                      f"warning: runner probe for {endpoint_url} returned ok=false: {attestation_payload.get('error')}",
+                      file=sys.stderr,
+                  )
+            except Exception as exc:
+                print(f"warning: runner probe for {endpoint_url} failed: {exc}", file=sys.stderr)
+        runner = RunnerRegistration(
+            runner_id=str(runner_payload["runner_id"]),
+            endpoint_url=endpoint_url,
+            service_id=service_id,
+            tee_mode=tee_mode,
+            attestation=attestation,
+            active=bool(runner_payload.get("active", True)),
+            notes=dict(runner_payload.get("notes") or {}),
+        )
+        control.register_runner(runner)
+    if state_file is not None:
+        save_host_state(state_file, control)
+    return control, state_file
+
+
 def _build_pricing_table_from_receipt(receipt: Receipt) -> PricingTable:
     return PricingTable(
         pricing_table_id=receipt.pricing_table_id,
@@ -284,6 +342,25 @@ def cmd_serve(args: Namespace) -> int:
     print(f"service_id={service.service_id}", file=sys.stderr)
     print(f"public_key_file={public_key_file}", file=sys.stderr)
     print(f"public_key_fingerprint={signer.public_key_fingerprint}", file=sys.stderr)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
+def cmd_host_serve(args: Namespace) -> int:
+    control, state_file = _bootstrap_host(args)
+    state_save = None
+    if state_file is not None:
+        state_save = lambda: save_host_state(state_file, control)
+    server = run_host_server(args.host, args.port, control, state_save=state_save)
+    host, port = server.server_address
+    print(f"minibridge host listening on http://{host}:{port}", file=sys.stderr)
+    print(f"host_id={control.host_id}", file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -430,6 +507,15 @@ def cmd_verify(args: Namespace) -> int:
 def build_parser() -> ArgumentParser:
     parser = ArgumentParser(prog="minibridge", description="Run and inspect Minibridge proof receipts.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    host = subparsers.add_parser("host", help="Run the Minibridge control plane.")
+    host_sub = host.add_subparsers(dest="host_command", required=True)
+    host_serve = host_sub.add_parser("serve", help="Run the Minibridge host control plane.")
+    host_serve.add_argument("--host", default="127.0.0.1")
+    host_serve.add_argument("--port", type=int, default=7070)
+    host_serve.add_argument("--config", default=None, help="Host config JSON file.")
+    host_serve.add_argument("--state-file", default=".minibridge-host-state.json", help="Host state file.")
+    host_serve.set_defaults(func=cmd_host_serve)
 
     serve = subparsers.add_parser("serve", help="Run the Minibridge HTTP service.")
     serve.add_argument("--host", default="127.0.0.1")

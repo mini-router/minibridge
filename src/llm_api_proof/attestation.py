@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 from datetime import datetime, timezone
+import socket
 import json
 import secrets
 
@@ -290,3 +291,114 @@ class FileAttestationProvider:
         if not isinstance(payload, dict):
             raise TypeError("attestation file must contain a JSON object")
         return AttestationEvidence.from_dict(payload)
+
+
+def _http_unix_json(socket_path: str, method: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request_lines = [
+        f"{method} {path} HTTP/1.1",
+        "Host: dstack",
+        "Content-Type: application/json",
+        f"Content-Length: {len(body)}",
+        "Connection: close",
+        "",
+        "",
+    ]
+    request_bytes = "\r\n".join(request_lines).encode("utf-8") + body
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client.connect(socket_path)
+        client.sendall(request_bytes)
+        chunks: list[bytes] = []
+        while True:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    finally:
+        client.close()
+
+    raw = b"".join(chunks)
+    header_bytes, _, body_bytes = raw.partition(b"\r\n\r\n")
+    if not body_bytes:
+        raise RuntimeError("dstack attestation response was empty")
+    header_text = header_bytes.decode("utf-8", errors="replace")
+    status_line = header_text.splitlines()[0] if header_text else ""
+    if "200" not in status_line:
+        raise RuntimeError(f"dstack attestation request failed: {status_line or 'unknown status'}")
+    try:
+        return json.loads(body_bytes.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"dstack attestation response was not JSON: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class DstackSocketAttestationProvider:
+    """
+    Collect attestation evidence from a Phala/dstack CVM over the local socket.
+
+    This is the production-friendly path for CPU TEE runners on Phala Cloud.
+    The provider sends a hash of the attestation context as reportData so the
+    returned quote can be tied to the exact runner configuration.
+    """
+
+    socket_path: str = "/var/run/dstack.sock"
+    mode: str = "cpu-tee"
+    backend: str = "dstack-socket"
+
+    def collect(self, context: dict[str, Any] | None = None) -> AttestationEvidence:
+        context = context or {}
+        context_hash = sha256(canonical_json(context).encode("utf-8")).hexdigest()
+        report_data = f"0x{context_hash}"
+        response = _http_unix_json(
+            self.socket_path,
+            "POST",
+            "/GetQuote",
+            {"reportData": report_data},
+        )
+        if not isinstance(response, dict):
+            raise TypeError("dstack attestation response must be a JSON object")
+
+        quote = response.get("quote")
+        event_log = response.get("event_log") or response.get("eventLog")
+        vm_config = response.get("vm_config") or response.get("vmConfig")
+        info = response.get("info")
+        service_id = (
+            str(context.get("service_id") or "")
+            or str(response.get("service_id") or "")
+            or str((vm_config or {}).get("app_id") if isinstance(vm_config, dict) else "")
+            or str((vm_config or {}).get("instance_id") if isinstance(vm_config, dict) else "")
+            or "cpu-tee-runner"
+        )
+        claims: dict[str, Any] = {
+            "service_id": service_id,
+            "report_data": report_data,
+            "attestation_source": "dstack-socket",
+            "socket_path": self.socket_path,
+        }
+        if isinstance(event_log, str):
+            claims["event_log"] = event_log
+        if isinstance(vm_config, dict):
+            claims["vm_config"] = vm_config
+            if "app_id" in vm_config:
+                claims["app_id"] = vm_config["app_id"]
+            if "instance_id" in vm_config:
+                claims["instance_id"] = vm_config["instance_id"]
+        if isinstance(info, dict):
+            claims["info"] = info
+
+        measurement = None
+        if isinstance(vm_config, dict):
+            measurement = str(vm_config.get("os_image_hash") or vm_config.get("measurement") or "") or None
+
+        return AttestationEvidence(
+            mode=self.mode,
+            backend=self.backend,
+            service_instance_id=service_id,
+            context_hash=context_hash,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            measurement=measurement,
+            report_data=report_data,
+            quote=str(quote) if quote is not None else None,
+            claims=claims,
+        )

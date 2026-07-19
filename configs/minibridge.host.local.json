@@ -1,0 +1,14 @@
+{
+  "host_id": "minibridge-host-local",
+  "runners": [
+    {
+      "runner_id": "runner-1",
+      "endpoint_url": "http://127.0.0.1:18081",
+      "auto_probe": true,
+      "notes": {
+        "role": "cpu-tee-runner",
+        "deployment": "local"
+      }
+    }
+  ]
+}

@@ -65,6 +65,39 @@ export type BundleManifestResponse = {
   attestation_verified: boolean;
 };
 
+export type RunnerRegistration = {
+  runner_id: string;
+  endpoint_url: string;
+  service_id?: string | null;
+  tee_mode?: string | null;
+  attestation?: Record<string, unknown>;
+  active: boolean;
+  last_seen_at?: string | null;
+  notes?: Record<string, unknown>;
+};
+
+export type HostJobRecord = {
+  job_id: string;
+  job_type: string;
+  runner_id: string;
+  request: Record<string, unknown>;
+  status: string;
+  submitted_at: string;
+  completed_at?: string | null;
+  response?: Record<string, unknown> | null;
+  receipt?: Record<string, unknown> | null;
+  proof?: Record<string, unknown> | null;
+  bundle?: {
+    manifest: BundleManifest;
+    raw_proofs: unknown[];
+    verified_proofs: unknown[];
+    validation_report: unknown[];
+    attestation?: Record<string, unknown> | null;
+  } | null;
+  verification?: Record<string, unknown> | null;
+  error?: string | null;
+};
+
 export type ResponsePayload = {
   ok: boolean;
   error?: string;

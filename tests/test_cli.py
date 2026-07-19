@@ -4,6 +4,7 @@ from argparse import Namespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import json
+import os
 import tempfile
 import unittest
 
@@ -161,6 +162,59 @@ class CliTests(unittest.TestCase):
             self.assertEqual(reloaded_registry.get("mock").describe().provider_id, "mock")
             result = verify_receipt(receipt, reloaded_signer.public_key, reloaded_service.pricing_table, request=request, response=response)
             self.assertTrue(result.ok, result.errors)
+
+    def test_bootstrap_runtime_hydrates_api_key_from_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config_path = tmp_path / "minibridge.config.json"
+            signing_key_file = tmp_path / "minibridge.signing.key"
+            public_key_file = tmp_path / "minibridge.signing.key.pub"
+
+            env_name = "MINIBRIDGE_TEST_API_KEY"
+            os.environ[env_name] = "secret-from-env"
+            try:
+                config = {
+                    "service_id": "svc-env",
+                    "pricing_table": {
+                        "pricing_table_id": "plan-env",
+                        "models": {
+                            "gpt-demo": {
+                                "input_per_1k": "0.0100",
+                                "output_per_1k": "0.0300",
+                            }
+                        },
+                    },
+                    "providers": [
+                        {
+                            "provider_id": "mock",
+                            "provider_kind": "mock",
+                        }
+                    ],
+                    "keys": [
+                        {
+                            "owner_id": "alice",
+                            "key_id": "k1",
+                            "api_key_env": env_name,
+                            "policy": {
+                                "allowed_callers": ["bob"],
+                                "allowed_models": ["gpt-demo"],
+                                "require_nonce": True,
+                                "require_expiry": True,
+                            },
+                        }
+                    ],
+                }
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+
+                args = Namespace(
+                    config=str(config_path),
+                    signing_key_file=str(signing_key_file),
+                    public_key_file=str(public_key_file),
+                )
+                service, _registry, _signer, _derived_public_key_file, _state_file = _bootstrap_runtime(args)
+                self.assertEqual(service.get_key("alice", "k1").api_key, "secret-from-env")
+            finally:
+                os.environ.pop(env_name, None)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,24 @@
+services:
+  minibridge-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - minibridge
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --config
+      - /config/minibridge.runner.phala.json
+      - --state-file
+      - ""
+    ports:
+      - "18081:8000"
+    volumes:
+      - ./configs:/config:ro
+      - /var/run/dstack.sock:/var/run/dstack.sock
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}

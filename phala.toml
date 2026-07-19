@@ -1,0 +1,4 @@
+app_id = "4f4ea5780387d1611e5231be1efe7c883f3f5102"
+name = "dstack-app-n06mh"
+profile = "default"
+compose_file = "docker-compose.yml"

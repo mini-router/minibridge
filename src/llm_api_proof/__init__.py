@@ -3,13 +3,16 @@ from .attestation import (
     AttestationPolicy,
     AttestationProvider,
     AttestationVerificationResult,
+    DstackSocketAttestationProvider,
     FileAttestationProvider,
     MockAttestationProvider,
     StaticAttestationProvider,
     verify_attestation_evidence,
 )
 from .bundle import BundleVerificationResult, ProofBundle, ProofBundleManifest, build_bundle, verify_bundle, write_bundle
+from .host_control import HostControlPlane, HostJobRecord, RunnerRegistration, load_host_state, restore_host_state, save_host_state
 from .http_server import make_handler, run_server
+from .host_http_server import make_handler as make_host_handler, run_host_server
 from .models import KeyPolicy, LLMRequest, LLMResponse, Proof, Receipt, Usage
 from .pricing import ModelPrice, PricingTable
 from .provider import (
@@ -46,6 +49,7 @@ __all__ = [
     "AttestationPolicy",
     "AttestationProvider",
     "AttestationVerificationResult",
+    "DstackSocketAttestationProvider",
     "FileAttestationProvider",
     "MockAttestationProvider",
     "StaticAttestationProvider",
@@ -56,8 +60,16 @@ __all__ = [
     "build_bundle",
     "verify_bundle",
     "write_bundle",
+    "HostControlPlane",
+    "HostJobRecord",
+    "RunnerRegistration",
+    "load_host_state",
+    "restore_host_state",
+    "save_host_state",
     "make_handler",
+    "make_host_handler",
     "run_server",
+    "run_host_server",
     "ModelPrice",
     "PricingTable",
     "LLMProvider",

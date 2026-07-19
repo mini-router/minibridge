@@ -87,7 +87,15 @@ def save_state(path: str | Path, service: LLMProofService, provider_registry: Pr
 
 def restore_keys(service: LLMProofService, keys_payload: list[dict[str, Any]]) -> None:
     for key_payload in keys_payload:
-        service.load_key(RegisteredKey.from_dict(dict(key_payload)))
+        payload = dict(key_payload)
+        if not payload.get("api_key"):
+            api_key_env = payload.get("api_key_env")
+            if api_key_env:
+                env_value = os.environ.get(str(api_key_env))
+                if env_value is None:
+                    raise ValueError(f"missing api key environment variable {api_key_env!r}")
+                payload["api_key"] = env_value
+        service.load_key(RegisteredKey.from_dict(payload))
 
 
 def restore_receipts(service: LLMProofService, receipts_payload: list[dict[str, Any]]) -> None:

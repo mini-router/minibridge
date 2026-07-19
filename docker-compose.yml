@@ -1,8 +1,18 @@
 services:
-  minibridge:
+  minibridge-host:
     build: .
+    command:
+      - minibridge
+      - host
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7070"
+      - --state-file
+      - /data/minibridge-host-state.json
     ports:
-      - "18080:8080"
+      - "18080:7070"
     volumes:
       - ./configs:/config:ro
       - ./data:/data
@@ -11,6 +21,6 @@ services:
     build:
       context: ./web
     depends_on:
-      - minibridge
+      - minibridge-host
     ports:
       - "5173:80"

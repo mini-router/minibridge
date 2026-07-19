@@ -9,7 +9,7 @@ import re
 import sys
 
 from .models import KeyPolicy, LLMRequest, LLMResponse, Proof, Receipt
-from .bundle import build_bundle
+from .bundle import build_bundle, verify_bundle, write_bundle
 from .provider import (
     ProviderRegistry,
     build_provider_from_payload,
@@ -79,6 +79,68 @@ def _maybe_save_state(state_save: Callable[[], None] | None) -> None:
         state_save()
     except Exception as exc:
         print(f"warning: state save failed: {exc}", file=sys.stderr)
+
+
+def _execute_job_payload(
+    service: LLMProofService,
+    provider_registry: ProviderRegistry,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    job_type = str(payload.get("job_type") or "prove")
+    request_payload = dict(payload.get("request") or {})
+    request_provider_id = str(request_payload.get("provider_id") or payload.get("provider_id") or "mock")
+    request = LLMRequest(
+        request_id=str(payload.get("job_id") or request_payload["request_id"]),
+        provider_id=request_provider_id,
+        caller_id=str(request_payload["caller_id"]),
+        owner_id=str(request_payload["owner_id"]),
+        key_id=str(request_payload["key_id"]),
+        model=str(request_payload["model"]),
+        messages=list(request_payload.get("messages") or []),
+        parameters=dict(request_payload.get("parameters") or {}),
+        metadata=dict(request_payload.get("metadata") or {}),
+        nonce=request_payload.get("nonce"),
+        expires_at=request_payload.get("expires_at"),
+    )
+    provider = provider_registry.get(request.provider_id)
+    if job_type == "call":
+        response, receipt = service.call(provider, request)
+        proof = None
+        bundle = None
+        verification = None
+    else:
+        response, receipt, proof = service.prove(provider, request)
+        attestation = service.attestation_status()
+        bundle = build_bundle(
+            [proof],
+            service_id=service.service_id,
+            tee_mode=service.tee_mode,
+            service_public_key=attestation["service_public_key"],
+            service_public_key_fingerprint=attestation["service_public_key_fingerprint"],
+            attestation=attestation,
+        )
+        verification = verify_bundle(_write_bundle_to_temp(bundle))
+    return {
+        "ok": True,
+        "job_id": str(payload.get("job_id") or request.request_id),
+        "job_type": job_type,
+        "runner": service.attestation_status(),
+        "provider": provider.describe().to_dict(),
+        "response": response.to_dict(),
+        "receipt": receipt.to_dict(),
+        "proof": proof.to_dict() if proof is not None else None,
+        "bundle": bundle.to_dict() if bundle is not None else None,
+        "verification": verification,
+    }
+
+
+def _write_bundle_to_temp(bundle: Any) -> Any:
+    from pathlib import Path
+    import tempfile
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="minibridge-runner-bundle-"))
+    write_bundle(temp_dir, bundle)
+    return temp_dir
 
 
 def _build_bundle_payload(service: LLMProofService) -> Any:
@@ -155,6 +217,14 @@ def make_handler_with_state(
                 except Exception as exc:
                     _write_json(self, 400, {"ok": False, "error": str(exc)})
                 return
+            if self.path == "/execute-job":
+                try:
+                    result = _execute_job_payload(service, provider_registry, payload)
+                    _maybe_save_state(state_save)
+                    _write_json(self, 200, result)
+                except Exception as exc:
+                    _write_json(self, 400, {"ok": False, "error": str(exc)})
+                return
             if self.path == "/receipts":
                 _write_json(self, 200, {"receipts": [receipt.to_dict() for receipt in service.receipts]})
                 return
@@ -188,6 +258,15 @@ def make_handler_with_state(
                 payload = _read_json(self)
             except Exception as exc:
                 _write_json(self, 400, {"ok": False, "error": f"invalid json: {exc}"})
+                return
+
+            if self.path == "/execute-job":
+                try:
+                    result = _execute_job_payload(service, provider_registry, payload)
+                    _maybe_save_state(state_save)
+                    _write_json(self, 200, result)
+                except Exception as exc:
+                    _write_json(self, 400, {"ok": False, "error": str(exc)})
                 return
 
             if self.path == "/register-provider":
