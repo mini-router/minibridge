@@ -19,9 +19,21 @@ cat > "$SOURCE_ROOT/configs/minibridge.runner.phala.json" <<'JSON'
   "pricing_table": {
     "pricing_table_id": "minibridge-phala",
     "models": {
-      "openai/gpt-4o-mini": {
-        "input_per_1k": "0.1500",
-        "output_per_1k": "0.6000"
+      "qwen/qwen3-coder-30b-a3b-instruct": {
+        "input_per_1k": "0.00007",
+        "output_per_1k": "0.00027"
+      },
+      "openai/gpt-oss-120b": {
+        "input_per_1k": "0.000036",
+        "output_per_1k": "0.00018"
+      },
+      "google/gemma-3-4b-it": {
+        "input_per_1k": "0.00005",
+        "output_per_1k": "0.00010"
+      },
+      "nvidia/nemotron-3-ultra-550b-a55b": {
+        "input_per_1k": "0.00050",
+        "output_per_1k": "0.00220"
       }
     }
   },
@@ -40,11 +52,17 @@ cat > "$SOURCE_ROOT/configs/minibridge.runner.phala.json" <<'JSON'
   ],
   "keys": [
     {
-      "owner_id": "provider-owner",
-      "key_id": "openrouter-prod-key",
+      "owner_id": "minirouter-miners",
+      "key_id": "minirouter-miners-openrouter-key",
       "api_key_env": "OPENROUTER_API_KEY",
       "policy": {
-        "allowed_models": ["openai/gpt-4o-mini"],
+        "allowed_callers": ["minirouter-maintainer"],
+        "allowed_models": [
+          "qwen/qwen3-coder-30b-a3b-instruct",
+          "openai/gpt-oss-120b",
+          "google/gemma-3-4b-it",
+          "nvidia/nemotron-3-ultra-550b-a55b"
+        ],
         "require_nonce": true,
         "require_expiry": true
       }

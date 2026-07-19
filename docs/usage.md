@@ -96,12 +96,17 @@ Example:
 curl -X POST http://127.0.0.1:7070/register-key \
   -H 'Content-Type: application/json' \
   -d '{
-    "owner_id": "provider-owner",
-    "key_id": "openrouter-prod-key",
+    "owner_id": "minirouter-miners",
+    "key_id": "minirouter-miners-openrouter-key",
     "api_key": "YOUR_SECRET_KEY",
     "policy": {
-      "allowed_callers": ["minibridge-maintainer"],
-      "allowed_models": ["openai/gpt-4o-mini"],
+      "allowed_callers": ["minirouter-maintainer"],
+      "allowed_models": [
+        "qwen/qwen3-coder-30b-a3b-instruct",
+        "openai/gpt-oss-120b",
+        "google/gemma-3-4b-it",
+        "nvidia/nemotron-3-ultra-550b-a55b"
+      ],
       "require_nonce": true,
       "require_expiry": true
     }
@@ -122,10 +127,10 @@ curl -X POST http://127.0.0.1:7070/prove \
   -d '{
     "request_id": "req-001",
     "provider_id": "openrouter-prod",
-    "caller_id": "minibridge-maintainer",
-    "owner_id": "provider-owner",
-    "key_id": "openrouter-prod-key",
-    "model": "openai/gpt-4o-mini",
+    "caller_id": "minirouter-maintainer",
+    "owner_id": "minirouter-miners",
+    "key_id": "minirouter-miners-openrouter-key",
+    "model": "qwen/qwen3-coder-30b-a3b-instruct",
     "messages": [
       {"role": "user", "content": "Reply with exactly: ok"}
     ],

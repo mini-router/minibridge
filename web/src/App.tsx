@@ -23,11 +23,11 @@ const demoRunner = {
 
 const demoRequest = {
   request_id: "req-ui-001",
-  provider_id: "mock",
-  caller_id: "minibridge-maintainer",
-  owner_id: "alice",
-  key_id: "alice-key",
-  model: "gpt-demo",
+  provider_id: "openrouter-prod",
+  caller_id: "minirouter-maintainer",
+  owner_id: "minirouter-miners",
+  key_id: "minirouter-miners-openrouter-key",
+  model: "qwen/qwen3-coder-30b-a3b-instruct",
   messages: [{ role: "user", content: "prove this call" }],
   parameters: { temperature: 0 },
   metadata: { source: "ui" },

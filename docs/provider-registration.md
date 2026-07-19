@@ -109,10 +109,10 @@ Once registered, the service can route a request through a provider-specific end
 {
   "request_id": "req_001",
   "provider_id": "openrouter-prod",
-  "caller_id": "minibridge-maintainer",
-  "owner_id": "alice",
-  "key_id": "alice-key",
-  "model": "openai/gpt-5.2",
+  "caller_id": "minirouter-maintainer",
+  "owner_id": "minirouter-miners",
+  "key_id": "minirouter-miners-openrouter-key",
+  "model": "qwen/qwen3-coder-30b-a3b-instruct",
   "messages": [
     {"role": "system", "content": "You are a proof engine."},
     {"role": "user", "content": "Summarize the billing policy."}
