@@ -33,6 +33,8 @@ The HTTP surface supports both generic and provider-specific calls:
 - `GET /proofs/{proof_id}`
 - `POST /register-provider`
 
+For a full usage walkthrough, see [docs/usage.md](docs/usage.md).
+
 ## What it proves
 
 - the request hash
@@ -151,13 +153,38 @@ minibridge verify --proof docs/proof.json --public-key-file .minibridge-signing.
 
 For unattended startup, use `minibridge serve --config <file>.json` with a bootstrap file that includes `pricing_table`, optional `providers`, and optional `keys`.
 
+To run the host control plane on this machine:
+
+```bash
+minibridge host serve --host 0.0.0.0 --port 7070
+```
+
+To run a CPU-TEE runner inside Phala or another dstack CVM:
+
+```bash
+minibridge serve --host 0.0.0.0 --port 8000 --config configs/minibridge.runner.phala.json --state-file ""
+```
+
+The runner config supports `api_key_env` for secrets injected by the TEE runtime. The included Phala template expects `OPENROUTER_API_KEY` in the environment.
+If you use the included Phala compose file, the container listens on `8000` but the public URL uses host port `18081`, for example:
+
+```bash
+curl https://<app-id>-18081.dstack-pha-prod9.phala.network/health
+```
+
 For a containerized demo, run:
 
 ```bash
 docker compose up --build
 ```
 
-That starts Minibridge on `http://127.0.0.1:8080` using `configs/minibridge.demo.json` and persists state under `./data`.
+That starts the host control plane on `http://127.0.0.1:18080` and the web UI on `http://127.0.0.1:5173`.
+
+For a Phala-style runner container, use:
+
+```bash
+docker compose -f docker-compose.runner.yml up --build
+```
 
 The web UI lives under `web/` and talks only to the HTTP API. It can be run independently of the Python package.
 
@@ -188,6 +215,7 @@ The service also enforces a basic anti-replay boundary:
 OpenRouter and Chutes are documented as OpenAI-compatible surfaces, and OpenAI itself publishes the official API reference. In this repo, the provider registry treats them as OpenAI-compatible backends with configurable endpoint URLs and payload styles rather than hard-coding one transport shape for every vendor.
 
 See [docs/provider-registration.md](docs/provider-registration.md) for copy-pastable `POST /register-provider` payloads and a provider-specific call example.
+See [docs/usage.md](docs/usage.md) for the end-to-end usage guide, including bundles and verification.
 
 ## Implementation roadmap
 
